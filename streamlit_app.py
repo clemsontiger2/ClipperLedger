@@ -228,39 +228,38 @@ if page == "New Entry":
 
             submitted = st.form_submit_button("Add to Ledger", use_container_width=True, type="primary")
 
-        if submitted:
-            barber_clean = (barber_name or "").strip().title()
-            customer_clean = (customer_name or "").strip().title()
+            if submitted:
+                barber_clean = (barber_name or "").strip().title()
+                customer_clean = (customer_name or "").strip().title()
 
-            if service == "Product" and not customer_clean:
-                customer_clean = "Walk-In"
+                if service == "Product" and not customer_clean:
+                    customer_clean = "Walk-In"
 
-            is_valid, errors, warnings = validate_entry(
-                barber_clean, customer_clean, cost, entry_date
-            )
+                is_valid, errors, warnings = validate_entry(
+                    barber_clean, customer_clean, cost, entry_date
+                )
 
-            if errors:
-                for err in errors:
-                    st.error(err)
-            else:
-                new_entry = {
-                    "ID": generate_unique_id(),
-                    "Date": str(entry_date),
-                    "Time": str(entry_time),
-                    "Barber_Name": barber_clean,
-                    "Customer_Name": customer_clean,
-                    "Service_Type": service,
-                    "Cost": float(cost),
-                    "Role": role,
-                }
-
-                if warnings:
-                    # Store in session state so user can confirm on next interaction
-                    st.session_state.pending_entry = new_entry
-                    st.session_state.pending_warnings = warnings
-                    st.rerun()
+                if errors:
+                    for err in errors:
+                        st.error(err)
                 else:
-                    add_entry_to_ledger(new_entry)
+                    new_entry = {
+                        "ID": generate_unique_id(),
+                        "Date": str(entry_date),
+                        "Time": str(entry_time),
+                        "Barber_Name": barber_clean,
+                        "Customer_Name": customer_clean,
+                        "Service_Type": service,
+                        "Cost": float(cost),
+                        "Role": role,
+                    }
+
+                    if warnings:
+                        st.session_state.pending_entry = new_entry
+                        st.session_state.pending_warnings = warnings
+                        st.rerun()
+                    else:
+                        add_entry_to_ledger(new_entry)
 
 # =========================
 # PAGE: VIEW & MANAGE
