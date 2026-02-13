@@ -174,7 +174,7 @@ if "ledger" not in st.session_state:
 st.sidebar.title("Shop Navigation")
 page = st.sidebar.radio(
     "Go to",
-    ["New Entry", "View & Manage Ledger", "Merge Ledgers", "Analytics", "Owner Dashboard"],
+    ["New Entry", "View & Manage Ledger", "Merge Ledgers", "Analytics", "Owner Dashboard", "Help & Guide"],
 )
 
 # Status indicator
@@ -216,15 +216,15 @@ if page == "New Entry":
             col1, col2 = st.columns(2)
 
             with col1:
-                entry_date = st.date_input("Date", value=datetime.now().date())
-                entry_time = st.time_input("Time", value=datetime.now().time())
-                barber_name = st.text_input("Barber Name", placeholder="e.g. David")
-                role = st.selectbox("Role", ROLES)
+                entry_date = st.date_input("Date", value=datetime.now().date(), help="Date the service was performed. Defaults to today.")
+                entry_time = st.time_input("Time", value=datetime.now().time(), help="Time of the appointment or walk-in.")
+                barber_name = st.text_input("Barber Name", placeholder="e.g. David", help="First name of the barber who performed the service.")
+                role = st.selectbox("Role", ROLES, help="'Owner' = shop owner's own cuts. 'Employee' = cuts by staff (commission applies).")
 
             with col2:
-                customer_name = st.text_input("Customer Name", placeholder="e.g. John Doe")
-                service = st.selectbox("Service", SERVICE_TYPES)
-                cost = st.number_input("Cost ($)", min_value=0.0, step=1.0, format="%.2f")
+                customer_name = st.text_input("Customer Name", placeholder="e.g. John Doe", help="Customer's name. For product-only sales, leave blank to auto-fill 'Walk-In'.")
+                service = st.selectbox("Service", SERVICE_TYPES, help="Type of service: Haircut, Beard Trim, Full Service (cut + beard), Line Up, or Product sale.")
+                cost = st.number_input("Cost ($)", min_value=0.0, step=1.0, format="%.2f", help="Amount charged. Costs over $500 or under $5 will trigger a warning.")
 
             submitted = st.form_submit_button("Add to Ledger", use_container_width=True, type="primary")
 
@@ -287,12 +287,13 @@ elif page == "View & Manage Ledger":
                 file_name=f"barber_ledger_{datetime.now().date()}.csv",
                 mime="text/csv",
                 use_container_width=True,
+                help="Downloads your full ledger as a .csv file you can open in Excel or Google Sheets.",
             )
 
         with col2:
             st.subheader("Sync to Disk")
             st.caption("Click after merging or deleting to save changes permanently.")
-            if st.button("Save Changes to Disk", use_container_width=True):
+            if st.button("Save Changes to Disk", use_container_width=True, help="Overwrites the saved file with your current session data. A backup is created automatically."):
                 if overwrite_disk_with_session():
                     st.success("Saved to disk!")
                     st.rerun()
@@ -321,6 +322,7 @@ elif page == "View & Manage Ledger":
                 "Select entry to delete",
                 options=range(len(ids)),
                 format_func=lambda x: display_options[x],
+                help="Pick an entry from the dropdown, then click Delete. Format: Date | Barber | Customer | Cost | Service.",
             )
 
             col_a, col_b = st.columns([1, 3])
@@ -345,7 +347,8 @@ elif page == "Merge Ledgers":
     st.info("Upload CSV files from other barbers to combine them with your ledger.")
 
     uploaded_files = st.file_uploader(
-        "Upload CSV files", type=["csv"], accept_multiple_files=True
+        "Upload CSV files", type=["csv"], accept_multiple_files=True,
+        help="Select one or more .csv files. Each file must have these columns: ID, Date, Time, Barber_Name, Customer_Name, Service_Type, Cost, Role.",
     )
 
     if uploaded_files:
@@ -420,7 +423,7 @@ elif page == "Analytics":
             else:
                 st.subheader("Time Window")
                 today = pd.Timestamp.today()
-                month_choice = st.date_input("Select Month", value=today.date())
+                month_choice = st.date_input("Select Month", value=today.date(), help="Pick any date — the app will show the full month that date falls in.")
                 month_start, month_end = get_month_window(pd.Timestamp(month_choice))
 
                 df_month = df[(df["Date"] >= month_start) & (df["Date"] < month_end)]
@@ -511,11 +514,11 @@ elif page == "Owner Dashboard":
                 st.warning("No valid data.")
             else:
                 st.sidebar.markdown("### Owner Settings")
-                rent = st.sidebar.number_input("Rent ($)", value=1500.0, min_value=0.0, step=50.0)
+                rent = st.sidebar.number_input("Rent ($)", value=1500.0, min_value=0.0, step=50.0, help="Monthly rent for the shop space.")
                 utilities = st.sidebar.number_input(
-                    "Utilities ($)", value=300.0, min_value=0.0, step=25.0
+                    "Utilities ($)", value=300.0, min_value=0.0, step=25.0, help="Monthly utilities cost (electric, water, internet, etc.)."
                 )
-                commission_rate = st.sidebar.slider("Commission %", 0, 100, 30) / 100.0
+                commission_rate = st.sidebar.slider("Commission %", 0, 100, 30, help="Percentage of employee revenue kept by the owner.") / 100.0
 
                 today = pd.Timestamp.today()
                 month_choice = st.date_input("Select Month", value=today.date())
@@ -616,3 +619,114 @@ elif page == "Owner Dashboard":
 
         except Exception as e:
             st.error(f"Dashboard error: {e}")
+
+# =========================
+# PAGE: HELP & GUIDE
+# =========================
+elif page == "Help & Guide":
+    st.title("Help & Guide")
+    st.write("Everything you need to know about using the Barber Shop Ledger.")
+
+    with st.expander("Getting Started", expanded=True):
+        st.markdown("""
+**First time here?** Follow these steps:
+
+1. Go to **New Entry** in the sidebar
+2. Fill in the barber name, customer name, service type, and cost
+3. Click **Add to Ledger** — your transaction is saved instantly
+4. Head to **Analytics** or **Owner Dashboard** to see your numbers
+
+Your data is saved to a local CSV file (`shop_data.csv`) so it persists between sessions.
+A backup (`shop_data_backup.csv`) is created automatically before every save.
+""")
+
+    with st.expander("New Entry — Adding Transactions"):
+        st.markdown("""
+| Field | What to enter |
+|---|---|
+| **Date** | Defaults to today. Change it for backdated entries. |
+| **Time** | Defaults to now. Useful for tracking peak hours. |
+| **Barber Name** | The barber who performed the service. Names are auto-capitalized. |
+| **Role** | **Owner** = the shop owner's own cuts (full revenue). **Employee** = staff cuts (commission applies on the Owner Dashboard). |
+| **Customer Name** | The client's name. For product-only sales, leave blank and it auto-fills as "Walk-In". |
+| **Service** | Haircut, Beard Trim, Full Service (cut + beard), Line Up, or Product. |
+| **Cost** | The amount charged. Warnings appear for amounts over $500 or under $5 — you can still confirm and save. |
+
+**Warnings vs. Errors:**
+- **Errors** (red) block the save — fix them first (e.g. missing barber name)
+- **Warnings** (yellow) ask you to confirm — the entry may be valid but looks unusual
+""")
+
+    with st.expander("View & Manage Ledger"):
+        st.markdown("""
+- **View** all entries in a scrollable table
+- **Download** your ledger as a CSV to open in Excel or Google Sheets
+- **Save Changes to Disk** — click this after deleting or merging entries to make changes permanent
+- **Delete Entry** — select a transaction from the dropdown and click Delete. A backup is created first.
+
+**Tip:** The table is sortable — click any column header to sort.
+""")
+
+    with st.expander("Merge Ledgers"):
+        st.markdown("""
+Use this when multiple barbers keep separate CSV files and you want to combine them.
+
+**How it works:**
+1. Upload one or more `.csv` files
+2. Each file must have the required columns: ID, Date, Time, Barber_Name, Customer_Name, Service_Type, Cost, Role
+3. Click **Merge Files** — duplicates are removed automatically using the ID column
+4. The merged result is saved to disk immediately
+
+**Use case:** Each barber tracks their own transactions on their phone, then the owner merges everything at the end of the week.
+""")
+
+    with st.expander("Analytics"):
+        st.markdown("""
+Charts and metrics for any month you select.
+
+- **Total Revenue** — sum of all transactions that month
+- **Transactions** — number of entries
+- **Avg Price** — average cost per transaction
+- **Services (no Product)** — count of service-only entries (excludes product sales)
+
+**Charts:**
+- **Revenue by Barber** — donut chart showing each barber's share
+- **Daily Revenue** — line chart of income over the month
+- **Service Mix** — bar chart of revenue by service type
+- **Busiest Hours** — bar chart showing which hours have the most traffic
+""")
+
+    with st.expander("Owner Dashboard"):
+        st.markdown("""
+Profit calculations and 30-day projections for the shop owner.
+
+**Sidebar settings** (only visible on this page):
+- **Rent** — your monthly rent
+- **Utilities** — electric, water, internet, etc.
+- **Commission %** — the cut you keep from employee revenue (e.g. 30% means you keep 30 cents of every dollar employees bring in)
+
+**Financials breakdown:**
+- **Gross Income** = Owner's own revenue + Commission from employees
+- **Overhead** = Rent + Utilities
+- **Net Profit** = Gross Income - Overhead
+
+**Projections** use your average daily revenue to estimate the next 30 days, split by the same owner/employee ratio.
+""")
+
+    with st.expander("FAQ"):
+        st.markdown("""
+**Q: Where is my data stored?**
+A: In a file called `shop_data.csv` in the same folder as the app. A backup called `shop_data_backup.csv` is created before every save.
+
+**Q: Can I edit an entry?**
+A: Not directly — delete the wrong entry and re-add it with the correct info.
+
+**Q: What happens if I close the browser?**
+A: Your data is safe on disk. When you reopen the app, it loads from the CSV file automatically.
+
+**Q: Can multiple people use this at the same time?**
+A: Each person should keep their own CSV and use **Merge Ledgers** to combine them. Simultaneous writes to the same file could cause conflicts.
+
+**Q: How do I reset everything?**
+A: Delete `shop_data.csv` and `shop_data_backup.csv`, then refresh the app.
+""")
