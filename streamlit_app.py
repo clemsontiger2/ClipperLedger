@@ -333,16 +333,17 @@ if page == "New Entry":
             with col1:
                 entry_date = st.date_input("Date", value=datetime.now().date(), help="Date the service was performed. Defaults to today.")
                 entry_time = st.time_input("Time", value=datetime.now().time(), help="Time of the appointment or walk-in.")
+                # Build barber name list from registered accounts
+                barber_names = [u["display_name"] for u in st.session_state.users.values()]
                 if st.session_state.current_role == "barber":
-                    barber_name = st.text_input(
-                        "Barber Name",
-                        value=st.session_state.current_display_name,
+                    barber_name = st.selectbox(
+                        "Barber Name", [st.session_state.current_display_name],
                         disabled=True,
                         help="Auto-filled from your account.",
                     )
                     role = st.selectbox("Role", ROLES, index=0, disabled=True, help="Employees are recorded as 'Employee' role.")
                 else:
-                    barber_name = st.text_input("Barber Name", placeholder="e.g. David", help="First name of the barber who performed the service.")
+                    barber_name = st.selectbox("Barber Name", barber_names, help="Select the barber who performed the service.")
                     role = st.selectbox("Role", ROLES, help="'Owner' = shop owner's own cuts. 'Employee' = cuts by staff (commission applies).")
 
             with col2:
