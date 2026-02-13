@@ -95,11 +95,20 @@ def create_backup():
             st.warning(f"Could not create backup: {e}")
 
 
+def _read_csv_robust(path: str) -> pd.DataFrame:
+    """Read a CSV, handling mismatched column counts gracefully."""
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        # Column count mismatch — read with all columns, skip bad lines
+        return pd.read_csv(path, names=REQUIRED_COLS, header=0, on_bad_lines="skip")
+
+
 def load_data() -> pd.DataFrame:
     """Loads data from CSV if it exists, with backup fallback."""
     if os.path.exists(CSV_FILE):
         try:
-            df = pd.read_csv(CSV_FILE)
+            df = _read_csv_robust(CSV_FILE)
             for col in REQUIRED_COLS:
                 if col not in df.columns:
                     df[col] = pd.NA
@@ -109,7 +118,7 @@ def load_data() -> pd.DataFrame:
             if os.path.exists(BACKUP_FILE):
                 try:
                     st.info("Loading from backup...")
-                    return pd.read_csv(BACKUP_FILE)
+                    return _read_csv_robust(BACKUP_FILE)
                 except Exception:
                     pass
             return pd.DataFrame(columns=REQUIRED_COLS)
@@ -122,6 +131,20 @@ def save_entry_to_disk(entry: dict):
         create_backup()
         df_entry = pd.DataFrame([entry])
         needs_header = not os.path.exists(CSV_FILE) or os.path.getsize(CSV_FILE) == 0
+
+        # If file exists, check if the header matches current columns
+        if not needs_header:
+            with open(CSV_FILE, "r") as f:
+                existing_header = f.readline().strip().split(",")
+            if set(existing_header) != set(REQUIRED_COLS):
+                # Header is stale — reload, add missing columns, rewrite
+                df_existing = _read_csv_robust(CSV_FILE)
+                for col in REQUIRED_COLS:
+                    if col not in df_existing.columns:
+                        df_existing[col] = pd.NA
+                df_existing = df_existing[REQUIRED_COLS]
+                df_existing.to_csv(CSV_FILE, index=False)
+
         df_entry.to_csv(CSV_FILE, mode="a", header=needs_header, index=False)
     except Exception as e:
         st.error(f"Failed to save entry: {e}")
