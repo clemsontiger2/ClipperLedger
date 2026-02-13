@@ -4,7 +4,7 @@ import uuid
 import os
 import shutil
 import json
-from datetime import datetime
+from datetime import datetime, time as dt_time
 import plotly.express as px
 
 # =========================
@@ -214,6 +214,22 @@ def validate_entry(barber: str, customer: str, cost: float, entry_date) -> tuple
     return (len(errors) == 0, errors, warnings)
 
 
+def round_time_to_nearest_15() -> dt_time:
+    """Round current time to the nearest 15-minute mark."""
+    now = datetime.now()
+    minutes = now.minute
+    remainder = minutes % 15
+    if remainder < 8:
+        rounded = minutes - remainder
+    else:
+        rounded = minutes + (15 - remainder)
+    hour = now.hour
+    if rounded >= 60:
+        rounded = 0
+        hour = (hour + 1) % 24
+    return dt_time(hour, rounded)
+
+
 def add_entry_to_ledger(entry: dict):
     """Add entry to session state and persist to disk."""
     st.session_state.ledger = pd.concat(
@@ -292,9 +308,10 @@ if st.session_state.current_role == "owner":
 
 page = st.sidebar.radio("Go to", pages)
 
-# Status indicator
-if not st.session_state.ledger.empty:
-    st.sidebar.success(f"{len(st.session_state.ledger)} records loaded")
+# Status indicator — show only the user's own record count
+user_record_count = len(get_user_ledger_raw())
+if user_record_count > 0:
+    st.sidebar.success(f"{user_record_count} records loaded")
     if os.path.exists(CSV_FILE):
         mod_time = datetime.fromtimestamp(os.path.getmtime(CSV_FILE))
         st.sidebar.caption(f"Last saved: {mod_time.strftime('%m/%d %H:%M')}")
@@ -332,7 +349,7 @@ if page == "New Entry":
 
             with col1:
                 entry_date = st.date_input("Date", value=datetime.now().date(), help="Date the service was performed. Defaults to today.")
-                entry_time = st.time_input("Time", value=datetime.now().time(), help="Time of the appointment or walk-in.")
+                entry_time = st.time_input("Time", value=round_time_to_nearest_15(), step=900, help="Time of the appointment or walk-in. Rounded to nearest 15 min.")
                 # Build barber name list from registered accounts
                 barber_names = [u["display_name"] for u in st.session_state.users.values()]
                 if st.session_state.current_role == "barber":
@@ -470,6 +487,63 @@ elif page == "View & Manage Ledger":
 
             with col_b:
                 st.caption("Deletion is permanent. A backup is created automatically.")
+
+    # Import CSV — available to all users
+    st.markdown("---")
+    st.subheader("Import Transactions from CSV")
+    st.caption("Upload a CSV file to load old transactions into your ledger.")
+
+    import_file = st.file_uploader(
+        "Upload CSV file", type=["csv"], key="import_csv",
+        help="CSV must have columns: Date, Customer_Name, Service_Type, Cost. Optional: Time, Role, Duration_Min.",
+    )
+
+    if import_file:
+        try:
+            df_import = pd.read_csv(import_file)
+
+            # Check for minimum required columns
+            min_cols = {"Date", "Customer_Name", "Service_Type", "Cost"}
+            missing = min_cols - set(df_import.columns)
+            if missing:
+                st.error(f"Missing required columns: {missing}")
+            else:
+                # Force Barber_Name to logged-in user (barbers can't import for others)
+                if st.session_state.current_role == "barber":
+                    df_import["Barber_Name"] = st.session_state.current_display_name
+                else:
+                    # Owner: keep Barber_Name from file if present, else use owner's name
+                    if "Barber_Name" not in df_import.columns:
+                        df_import["Barber_Name"] = st.session_state.current_display_name
+
+                # Fill optional columns with defaults
+                if "Role" not in df_import.columns:
+                    df_import["Role"] = "Employee"
+                if "Time" not in df_import.columns:
+                    df_import["Time"] = "12:00:00"
+                if "Duration_Min" not in df_import.columns:
+                    df_import["Duration_Min"] = 30
+
+                # Generate unique IDs (ignore any existing ID column)
+                df_import["ID"] = [generate_unique_id() for _ in range(len(df_import))]
+
+                # Keep only required columns
+                df_import = df_import[REQUIRED_COLS]
+
+                st.write(f"Preview ({len(df_import)} rows):")
+                st.dataframe(df_import.head(10), use_container_width=True)
+
+                if st.button("Import All", type="primary", use_container_width=True):
+                    st.session_state.ledger = pd.concat(
+                        [st.session_state.ledger, df_import], ignore_index=True
+                    )
+                    if overwrite_disk_with_session():
+                        st.success(f"Imported {len(df_import)} transactions!")
+                        st.rerun()
+                    else:
+                        st.warning("Added to session but failed to save to disk.")
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
 
 # =========================
 # PAGE: MERGE LEDGERS
