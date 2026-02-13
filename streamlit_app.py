@@ -23,10 +23,12 @@ REQUIRED_COLS = [
     "Service_Type",
     "Cost",
     "Role",
+    "Duration_Min",
 ]
 
 SERVICE_TYPES = ["Haircut", "Beard Trim", "Full Service", "Line Up", "Product"]
 ROLES = ["Employee", "Owner"]
+DURATION_OPTIONS = [15, 30, 45, 60, 75, 90, 105, 120]
 
 
 # =========================
@@ -114,6 +116,7 @@ def normalize_ledger(df_in: pd.DataFrame) -> pd.DataFrame:
     df = df.dropna(subset=["Date", "Cost"])
     df["Barber_Name"] = df["Barber_Name"].astype(str).str.strip().str.title()
     df["Customer_Name"] = df["Customer_Name"].astype(str).str.strip().str.title()
+    df["Duration_Min"] = pd.to_numeric(df["Duration_Min"], errors="coerce").fillna(30).astype(int)
     return df
 
 
@@ -225,6 +228,7 @@ if page == "New Entry":
                 customer_name = st.text_input("Customer Name", placeholder="e.g. John Doe", help="Customer's name. For product-only sales, leave blank to auto-fill 'Walk-In'.")
                 service = st.selectbox("Service", SERVICE_TYPES, help="Type of service: Haircut, Beard Trim, Full Service (cut + beard), Line Up, or Product sale.")
                 cost = st.number_input("Cost ($)", min_value=0.0, step=1.0, format="%.2f", help="Amount charged. Costs over $500 or under $5 will trigger a warning.")
+                duration = st.selectbox("Duration", DURATION_OPTIONS, index=1, format_func=lambda m: f"{m} min", help="Length of service in 15-minute increments.")
 
             submitted = st.form_submit_button("Add to Ledger", use_container_width=True, type="primary")
 
@@ -252,6 +256,7 @@ if page == "New Entry":
                     "Service_Type": service,
                     "Cost": float(cost),
                     "Role": role,
+                    "Duration_Min": int(duration),
                 }
 
                 if warnings:
@@ -310,9 +315,11 @@ elif page == "View & Manage Ledger":
             except (ValueError, TypeError):
                 date_str = str(row["Date"])[:10]
 
+            dur = row.get("Duration_Min", "")
+            dur_str = f" | {int(dur)}min" if pd.notna(dur) and str(dur).strip() else ""
             label = (
                 f"{date_str} | {row['Barber_Name']} | "
-                f"{row['Customer_Name']} | ${row['Cost']:.2f} | {row['Service_Type']}"
+                f"{row['Customer_Name']} | ${row['Cost']:.2f} | {row['Service_Type']}{dur_str}"
             )
             display_options.append(label)
             ids.append(row["ID"])
@@ -436,11 +443,14 @@ elif page == "Analytics":
                     avg_price = float(df_month["Cost"].mean())
                     service_count = int((df_month["Service_Type"] != "Product").sum())
 
-                    m1, m2, m3, m4 = st.columns(4)
+                    avg_dur = float(df_month["Duration_Min"].mean()) if "Duration_Min" in df_month.columns else 0
+
+                    m1, m2, m3, m4, m5 = st.columns(5)
                     m1.metric("Total Revenue", f"${total_rev:,.2f}")
                     m2.metric("Transactions", f"{total_tx:,}")
                     m3.metric("Avg Price", f"${avg_price:,.2f}")
                     m4.metric("Services (no Product)", f"{service_count:,}")
+                    m5.metric("Avg Duration", f"{avg_dur:.0f} min")
 
                     st.markdown("---")
 
@@ -504,9 +514,43 @@ elif page == "Analytics":
 elif page == "Owner Dashboard":
     st.title("Owner Profit & Projections")
 
-    if st.session_state.ledger.empty:
+    # --- Password gate ---
+    if "owner_authenticated" not in st.session_state:
+        st.session_state.owner_authenticated = False
+
+    if not st.session_state.owner_authenticated:
+        st.info("This page is password-protected. Enter the owner password to continue.")
+        with st.form("owner_login_form"):
+            owner_pw = st.text_input("Password", type="password", help="Ask the shop owner for the dashboard password.")
+            login_submit = st.form_submit_button("Unlock Dashboard", use_container_width=True, type="primary")
+        if login_submit:
+            if owner_pw == st.session_state.get("owner_password", "owner"):
+                st.session_state.owner_authenticated = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+        with st.expander("How do I set or change the password?"):
+            st.markdown("""
+The default password is **owner**. To change it, use the sidebar option below.
+""")
+        with st.form("change_pw_form"):
+            current_pw = st.text_input("Current Password", type="password")
+            new_pw = st.text_input("New Password", type="password")
+            confirm_pw = st.text_input("Confirm New Password", type="password")
+            change_submit = st.form_submit_button("Change Password", use_container_width=True)
+        if change_submit:
+            if current_pw != st.session_state.get("owner_password", "owner"):
+                st.error("Current password is incorrect.")
+            elif not new_pw:
+                st.error("New password cannot be empty.")
+            elif new_pw != confirm_pw:
+                st.error("New passwords do not match.")
+            else:
+                st.session_state.owner_password = new_pw
+                st.success("Password changed! You can now log in with your new password.")
+
+    elif st.session_state.ledger.empty:
         st.warning("No data available.")
-    else:
         try:
             df = get_clean_ledger()
 
@@ -651,6 +695,7 @@ A backup (`shop_data_backup.csv`) is created automatically before every save.
 | **Customer Name** | The client's name. For product-only sales, leave blank and it auto-fills as "Walk-In". |
 | **Service** | Haircut, Beard Trim, Full Service (cut + beard), Line Up, or Product. |
 | **Cost** | The amount charged. Warnings appear for amounts over $500 or under $5 — you can still confirm and save. |
+| **Duration** | How long the service took, in 15-minute increments (15 min to 2 hrs). Defaults to 30 min. |
 
 **Warnings vs. Errors:**
 - **Errors** (red) block the save — fix them first (e.g. missing barber name)
@@ -688,6 +733,7 @@ Charts and metrics for any month you select.
 - **Transactions** — number of entries
 - **Avg Price** — average cost per transaction
 - **Services (no Product)** — count of service-only entries (excludes product sales)
+- **Avg Duration** — average service length in minutes
 
 **Charts:**
 - **Revenue by Barber** — donut chart showing each barber's share
@@ -699,6 +745,8 @@ Charts and metrics for any month you select.
     with st.expander("Owner Dashboard"):
         st.markdown("""
 Profit calculations and 30-day projections for the shop owner.
+
+**Password protection:** This page requires a password to access. The default password is `owner`. You can change it from the login screen — enter your current password, then set a new one. The password resets when the app restarts.
 
 **Sidebar settings** (only visible on this page):
 - **Rent** — your monthly rent
@@ -729,4 +777,10 @@ A: Each person should keep their own CSV and use **Merge Ledgers** to combine th
 
 **Q: How do I reset everything?**
 A: Delete `shop_data.csv` and `shop_data_backup.csv`, then refresh the app.
+
+**Q: How do I keep employees out of the Owner Dashboard?**
+A: The Owner Dashboard is password-protected. Only share the password with authorized users. You can change the password from the login screen.
+
+**Q: What is the Duration field for?**
+A: It tracks how long each service takes (in 15-minute steps). This helps identify which services are most time-efficient and shows up as "Avg Duration" on the Analytics page.
 """)
