@@ -100,8 +100,8 @@ def _read_csv_robust(path: str) -> pd.DataFrame:
     try:
         return pd.read_csv(path)
     except Exception:
-        # Column count mismatch — read with all columns, skip bad lines
-        return pd.read_csv(path, names=REQUIRED_COLS, header=0, on_bad_lines="skip")
+        # Column count mismatch — read without forcing column names, skip bad lines
+        return pd.read_csv(path, on_bad_lines="skip")
 
 
 def load_data() -> pd.DataFrame:
