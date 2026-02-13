@@ -488,6 +488,63 @@ elif page == "View & Manage Ledger":
             with col_b:
                 st.caption("Deletion is permanent. A backup is created automatically.")
 
+    # Import CSV — available to all users
+    st.markdown("---")
+    st.subheader("Import Transactions from CSV")
+    st.caption("Upload a CSV file to load old transactions into your ledger.")
+
+    import_file = st.file_uploader(
+        "Upload CSV file", type=["csv"], key="import_csv",
+        help="CSV must have columns: Date, Customer_Name, Service_Type, Cost. Optional: Time, Role, Duration_Min.",
+    )
+
+    if import_file:
+        try:
+            df_import = pd.read_csv(import_file)
+
+            # Check for minimum required columns
+            min_cols = {"Date", "Customer_Name", "Service_Type", "Cost"}
+            missing = min_cols - set(df_import.columns)
+            if missing:
+                st.error(f"Missing required columns: {missing}")
+            else:
+                # Force Barber_Name to logged-in user (barbers can't import for others)
+                if st.session_state.current_role == "barber":
+                    df_import["Barber_Name"] = st.session_state.current_display_name
+                else:
+                    # Owner: keep Barber_Name from file if present, else use owner's name
+                    if "Barber_Name" not in df_import.columns:
+                        df_import["Barber_Name"] = st.session_state.current_display_name
+
+                # Fill optional columns with defaults
+                if "Role" not in df_import.columns:
+                    df_import["Role"] = "Employee"
+                if "Time" not in df_import.columns:
+                    df_import["Time"] = "12:00:00"
+                if "Duration_Min" not in df_import.columns:
+                    df_import["Duration_Min"] = 30
+
+                # Generate unique IDs (ignore any existing ID column)
+                df_import["ID"] = [generate_unique_id() for _ in range(len(df_import))]
+
+                # Keep only required columns
+                df_import = df_import[REQUIRED_COLS]
+
+                st.write(f"Preview ({len(df_import)} rows):")
+                st.dataframe(df_import.head(10), use_container_width=True)
+
+                if st.button("Import All", type="primary", use_container_width=True):
+                    st.session_state.ledger = pd.concat(
+                        [st.session_state.ledger, df_import], ignore_index=True
+                    )
+                    if overwrite_disk_with_session():
+                        st.success(f"Imported {len(df_import)} transactions!")
+                        st.rerun()
+                    else:
+                        st.warning("Added to session but failed to save to disk.")
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
+
 # =========================
 # PAGE: MERGE LEDGERS
 # =========================
