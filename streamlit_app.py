@@ -551,6 +551,7 @@ The default password is **owner**. To change it, use the sidebar option below.
 
     elif st.session_state.ledger.empty:
         st.warning("No data available.")
+    else:
         try:
             df = get_clean_ledger()
 
