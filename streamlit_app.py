@@ -3,7 +3,8 @@ import pandas as pd
 import uuid
 import os
 import shutil
-from datetime import datetime
+import json
+from datetime import datetime, time as dt_time
 import plotly.express as px
 
 # =========================
@@ -13,6 +14,7 @@ st.set_page_config(page_title="Barber Shop Ledger", layout="wide")
 
 CSV_FILE = "shop_data.csv"
 BACKUP_FILE = "shop_data_backup.csv"
+USERS_FILE = "users.json"
 
 REQUIRED_COLS = [
     "ID",
@@ -29,6 +31,46 @@ REQUIRED_COLS = [
 SERVICE_TYPES = ["Haircut", "Beard Trim", "Full Service", "Line Up", "Product"]
 ROLES = ["Employee", "Owner"]
 DURATION_OPTIONS = [15, 30, 45, 60, 75, 90, 105, 120]
+
+
+# =========================
+# USER MANAGEMENT
+# =========================
+def load_users() -> dict:
+    """Load user accounts from JSON file."""
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def save_users(users: dict):
+    """Persist user accounts to JSON file."""
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f, indent=2)
+
+
+def initialize_default_owner(users: dict) -> dict:
+    """Ensure at least one owner account exists on first run."""
+    if not any(u.get("role") == "owner" for u in users.values()):
+        users["owner"] = {
+            "password": "owner",
+            "role": "owner",
+            "display_name": "Owner",
+        }
+        save_users(users)
+    return users
+
+
+def authenticate(username: str, password: str, users: dict):
+    """Returns the user dict if credentials match, else None."""
+    user = users.get(username.lower().strip())
+    if user and user["password"] == password:
+        return user
+    return None
 
 
 # =========================
@@ -53,11 +95,20 @@ def create_backup():
             st.warning(f"Could not create backup: {e}")
 
 
+def _read_csv_robust(path: str) -> pd.DataFrame:
+    """Read a CSV, handling mismatched column counts gracefully."""
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        # Column count mismatch — read without forcing column names, skip bad lines
+        return pd.read_csv(path, on_bad_lines="skip")
+
+
 def load_data() -> pd.DataFrame:
     """Loads data from CSV if it exists, with backup fallback."""
     if os.path.exists(CSV_FILE):
         try:
-            df = pd.read_csv(CSV_FILE)
+            df = _read_csv_robust(CSV_FILE)
             for col in REQUIRED_COLS:
                 if col not in df.columns:
                     df[col] = pd.NA
@@ -67,11 +118,7 @@ def load_data() -> pd.DataFrame:
             if os.path.exists(BACKUP_FILE):
                 try:
                     st.info("Loading from backup...")
-                    backup_df = pd.read_csv(BACKUP_FILE)
-                    for col in REQUIRED_COLS:
-                        if col not in backup_df.columns:
-                            backup_df[col] = pd.NA
-                    return backup_df[REQUIRED_COLS]
+                    return _read_csv_robust(BACKUP_FILE)
                 except Exception:
                     pass
             return pd.DataFrame(columns=REQUIRED_COLS)
@@ -84,6 +131,20 @@ def save_entry_to_disk(entry: dict):
         create_backup()
         df_entry = pd.DataFrame([entry])
         needs_header = not os.path.exists(CSV_FILE) or os.path.getsize(CSV_FILE) == 0
+
+        # If file exists, check if the header matches current columns
+        if not needs_header:
+            with open(CSV_FILE, "r") as f:
+                existing_header = f.readline().strip().split(",")
+            if set(existing_header) != set(REQUIRED_COLS):
+                # Header is stale — reload, add missing columns, rewrite
+                df_existing = _read_csv_robust(CSV_FILE)
+                for col in REQUIRED_COLS:
+                    if col not in df_existing.columns:
+                        df_existing[col] = pd.NA
+                df_existing = df_existing[REQUIRED_COLS]
+                df_existing.to_csv(CSV_FILE, index=False)
+
         df_entry.to_csv(CSV_FILE, mode="a", header=needs_header, index=False)
     except Exception as e:
         st.error(f"Failed to save entry: {e}")
@@ -128,6 +189,26 @@ def get_clean_ledger() -> pd.DataFrame:
     return normalize_ledger(st.session_state.ledger)
 
 
+def get_user_ledger() -> pd.DataFrame:
+    """Return clean ledger filtered to the current user's visibility.
+    Owner sees everything; barbers see only their own rows."""
+    df = get_clean_ledger()
+    if st.session_state.current_role == "owner":
+        return df
+    display = st.session_state.current_display_name
+    return df[df["Barber_Name"].str.lower() == display.lower()]
+
+
+def get_user_ledger_raw() -> pd.DataFrame:
+    """Return raw session ledger filtered to the current user.
+    Used for View & Manage operations on st.session_state.ledger."""
+    df = st.session_state.ledger
+    if st.session_state.current_role == "owner":
+        return df
+    display = st.session_state.current_display_name
+    return df[df["Barber_Name"].astype(str).str.strip().str.lower() == display.lower()]
+
+
 def get_month_window(anchor_date: pd.Timestamp) -> tuple:
     month_start = anchor_date.normalize().replace(day=1)
     month_end = month_start + pd.offsets.MonthBegin(1)
@@ -156,6 +237,22 @@ def validate_entry(barber: str, customer: str, cost: float, entry_date) -> tuple
     return (len(errors) == 0, errors, warnings)
 
 
+def round_time_to_nearest_15() -> dt_time:
+    """Round current time to the nearest 15-minute mark."""
+    now = datetime.now()
+    minutes = now.minute
+    remainder = minutes % 15
+    if remainder < 8:
+        rounded = minutes - remainder
+    else:
+        rounded = minutes + (15 - remainder)
+    hour = now.hour
+    if rounded >= 60:
+        rounded = 0
+        hour = (hour + 1) % 24
+    return dt_time(hour, rounded)
+
+
 def add_entry_to_ledger(entry: dict):
     """Add entry to session state and persist to disk."""
     st.session_state.ledger = pd.concat(
@@ -175,18 +272,69 @@ def add_entry_to_ledger(entry: dict):
 if "ledger" not in st.session_state:
     st.session_state.ledger = load_data()
 
+if "users" not in st.session_state:
+    st.session_state.users = load_users()
+    st.session_state.users = initialize_default_owner(st.session_state.users)
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
+if "current_role" not in st.session_state:
+    st.session_state.current_role = None
+if "current_display_name" not in st.session_state:
+    st.session_state.current_display_name = None
+
+# =========================
+# LOGIN GATE
+# =========================
+if not st.session_state.logged_in:
+    st.title("Barber Shop Ledger - Login")
+    with st.form("login_form"):
+        username = st.text_input("Username", placeholder="Enter your username")
+        password = st.text_input("Password", type="password")
+        login_btn = st.form_submit_button("Log In", use_container_width=True, type="primary")
+
+    if login_btn:
+        user = authenticate(username, password, st.session_state.users)
+        if user:
+            st.session_state.logged_in = True
+            st.session_state.current_user = username.lower().strip()
+            st.session_state.current_role = user["role"]
+            st.session_state.current_display_name = user["display_name"]
+            st.rerun()
+        else:
+            st.error("Invalid username or password.")
+    st.stop()
+
 # =========================
 # SIDEBAR NAV
 # =========================
 st.sidebar.title("Shop Navigation")
-page = st.sidebar.radio(
-    "Go to",
-    ["New Entry", "View & Manage Ledger", "Merge Ledgers", "Analytics", "Owner Dashboard", "Help & Guide"],
-)
 
-# Status indicator
-if not st.session_state.ledger.empty:
-    st.sidebar.success(f"{len(st.session_state.ledger)} records loaded")
+# User info and logout
+st.sidebar.markdown(f"Logged in as: **{st.session_state.current_display_name}** ({st.session_state.current_role})")
+if st.sidebar.button("Logout", use_container_width=True):
+    for key in ["logged_in", "current_user", "current_role", "current_display_name", "owner_authenticated"]:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.rerun()
+
+st.sidebar.markdown("---")
+
+# Build page list based on role
+pages = ["New Entry", "View & Manage Ledger", "Analytics", "Help & Guide"]
+if st.session_state.current_role == "owner":
+    pages.insert(2, "Merge Ledgers")
+    pages.insert(-1, "Owner Dashboard")
+    pages.append("Manage Users")
+
+page = st.sidebar.radio("Go to", pages)
+
+# Status indicator — show only the user's own record count
+user_record_count = len(get_user_ledger_raw())
+if user_record_count > 0:
+    st.sidebar.success(f"{user_record_count} records loaded")
     if os.path.exists(CSV_FILE):
         mod_time = datetime.fromtimestamp(os.path.getmtime(CSV_FILE))
         st.sidebar.caption(f"Last saved: {mod_time.strftime('%m/%d %H:%M')}")
@@ -224,9 +372,19 @@ if page == "New Entry":
 
             with col1:
                 entry_date = st.date_input("Date", value=datetime.now().date(), help="Date the service was performed. Defaults to today.")
-                entry_time = st.time_input("Time", value=datetime.now().time(), help="Time of the appointment or walk-in.")
-                barber_name = st.text_input("Barber Name", placeholder="e.g. David", help="First name of the barber who performed the service.")
-                role = st.selectbox("Role", ROLES, help="'Owner' = shop owner's own cuts. 'Employee' = cuts by staff (commission applies).")
+                entry_time = st.time_input("Time", value=round_time_to_nearest_15(), step=900, help="Time of the appointment or walk-in. Rounded to nearest 15 min.")
+                # Build barber name list from registered accounts
+                barber_names = [u["display_name"] for u in st.session_state.users.values()]
+                if st.session_state.current_role == "barber":
+                    barber_name = st.selectbox(
+                        "Barber Name", [st.session_state.current_display_name],
+                        disabled=True,
+                        help="Auto-filled from your account.",
+                    )
+                    role = st.selectbox("Role", ROLES, index=0, disabled=True, help="Employees are recorded as 'Employee' role.")
+                else:
+                    barber_name = st.selectbox("Barber Name", barber_names, help="Select the barber who performed the service.")
+                    role = st.selectbox("Role", ROLES, help="'Owner' = shop owner's own cuts. 'Employee' = cuts by staff (commission applies).")
 
             with col2:
                 customer_name = st.text_input("Customer Name", placeholder="e.g. John Doe", help="Customer's name. For product-only sales, leave blank to auto-fill 'Walk-In'.")
@@ -276,11 +434,13 @@ if page == "New Entry":
 elif page == "View & Manage Ledger":
     st.title("Current Ledger")
 
-    if st.session_state.ledger.empty:
+    user_df = get_user_ledger_raw()
+
+    if user_df.empty:
         st.info("No entries yet. Add your first transaction!")
     else:
         st.dataframe(
-            st.session_state.ledger,
+            user_df,
             use_container_width=True,
             height=400,
         )
@@ -289,23 +449,24 @@ elif page == "View & Manage Ledger":
 
         with col1:
             st.subheader("Download")
-            csv_bytes = convert_df_to_csv_bytes(st.session_state.ledger)
+            csv_bytes = convert_df_to_csv_bytes(user_df)
             st.download_button(
                 label="Download Ledger as CSV",
                 data=csv_bytes,
                 file_name=f"barber_ledger_{datetime.now().date()}.csv",
                 mime="text/csv",
                 use_container_width=True,
-                help="Downloads your full ledger as a .csv file you can open in Excel or Google Sheets.",
+                help="Downloads your ledger as a .csv file you can open in Excel or Google Sheets.",
             )
 
         with col2:
-            st.subheader("Sync to Disk")
-            st.caption("Click after merging or deleting to save changes permanently.")
-            if st.button("Save Changes to Disk", use_container_width=True, help="Overwrites the saved file with your current session data. A backup is created automatically."):
-                if overwrite_disk_with_session():
-                    st.success("Saved to disk!")
-                    st.rerun()
+            if st.session_state.current_role == "owner":
+                st.subheader("Sync to Disk")
+                st.caption("Click after merging or deleting to save changes permanently.")
+                if st.button("Save Changes to Disk", use_container_width=True, help="Overwrites the saved file with your current session data. A backup is created automatically."):
+                    if overwrite_disk_with_session():
+                        st.success("Saved to disk!")
+                        st.rerun()
 
         # Delete functionality
         st.markdown("---")
@@ -313,7 +474,7 @@ elif page == "View & Manage Ledger":
 
         display_options = []
         ids = []
-        for _, row in st.session_state.ledger.iterrows():
+        for _, row in user_df.iterrows():
             try:
                 date_str = pd.to_datetime(row["Date"]).strftime("%m/%d/%y")
             except (ValueError, TypeError):
@@ -350,10 +511,71 @@ elif page == "View & Manage Ledger":
             with col_b:
                 st.caption("Deletion is permanent. A backup is created automatically.")
 
+    # Import CSV — available to all users
+    st.markdown("---")
+    st.subheader("Import Transactions from CSV")
+    st.caption("Upload a CSV file to load old transactions into your ledger.")
+
+    import_file = st.file_uploader(
+        "Upload CSV file", type=["csv"], key="import_csv",
+        help="CSV must have columns: Date, Customer_Name, Service_Type, Cost. Optional: Time, Role, Duration_Min.",
+    )
+
+    if import_file:
+        try:
+            df_import = pd.read_csv(import_file)
+
+            # Check for minimum required columns
+            min_cols = {"Date", "Customer_Name", "Service_Type", "Cost"}
+            missing = min_cols - set(df_import.columns)
+            if missing:
+                st.error(f"Missing required columns: {missing}")
+            else:
+                # Force Barber_Name to logged-in user (barbers can't import for others)
+                if st.session_state.current_role == "barber":
+                    df_import["Barber_Name"] = st.session_state.current_display_name
+                else:
+                    # Owner: keep Barber_Name from file if present, else use owner's name
+                    if "Barber_Name" not in df_import.columns:
+                        df_import["Barber_Name"] = st.session_state.current_display_name
+
+                # Fill optional columns with defaults
+                if "Role" not in df_import.columns:
+                    df_import["Role"] = "Employee"
+                if "Time" not in df_import.columns:
+                    df_import["Time"] = "12:00:00"
+                if "Duration_Min" not in df_import.columns:
+                    df_import["Duration_Min"] = 30
+
+                # Generate unique IDs (ignore any existing ID column)
+                df_import["ID"] = [generate_unique_id() for _ in range(len(df_import))]
+
+                # Keep only required columns
+                df_import = df_import[REQUIRED_COLS]
+
+                st.write(f"Preview ({len(df_import)} rows):")
+                st.dataframe(df_import.head(10), use_container_width=True)
+
+                if st.button("Import All", type="primary", use_container_width=True):
+                    st.session_state.ledger = pd.concat(
+                        [st.session_state.ledger, df_import], ignore_index=True
+                    )
+                    if overwrite_disk_with_session():
+                        st.success(f"Imported {len(df_import)} transactions!")
+                        st.rerun()
+                    else:
+                        st.warning("Added to session but failed to save to disk.")
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
+
 # =========================
 # PAGE: MERGE LEDGERS
 # =========================
 elif page == "Merge Ledgers":
+    if st.session_state.current_role != "owner":
+        st.error("Access denied. Owner account required.")
+        st.stop()
+
     st.title("Merge Shop Ledgers")
     st.info("Upload CSV files from other barbers to combine them with your ledger.")
 
@@ -433,7 +655,7 @@ elif page == "Analytics":
         st.warning("No data available. Add entries or upload a ledger.")
     else:
         try:
-            df = get_clean_ledger()
+            df = get_user_ledger()
 
             if df.empty:
                 st.warning("No valid data after cleaning.")
@@ -522,6 +744,10 @@ elif page == "Analytics":
 # PAGE: OWNER DASHBOARD
 # =========================
 elif page == "Owner Dashboard":
+    if st.session_state.current_role != "owner":
+        st.error("Access denied. Owner account required.")
+        st.stop()
+
     st.title("Owner Profit & Projections")
 
     # --- Password gate ---
@@ -559,6 +785,8 @@ The default password is **owner**. To change it, use the sidebar option below.
                 st.session_state.owner_password = new_pw
                 st.success("Password changed! You can now log in with your new password.")
 
+    elif st.session_state.ledger.empty:
+        st.warning("No data available.")
     else:
         try:
             df = get_clean_ledger()
@@ -680,14 +908,32 @@ elif page == "Help & Guide":
     st.title("Help & Guide")
     st.write("Everything you need to know about using the Barber Shop Ledger.")
 
-    with st.expander("Getting Started", expanded=True):
+    with st.expander("Login & Accounts", expanded=True):
+        st.markdown("""
+**Logging In:** Every user must log in before accessing the app. The owner sets up accounts for each barber.
+
+**Account Types:**
+- **Owner** — Full access to all entries, analytics, merging, and the Owner Dashboard. Can create and manage barber accounts.
+- **Barber** — Sees only their own entries and analytics. Cannot access Merge Ledgers or the Owner Dashboard.
+
+**First-time setup:** The default owner account is:
+- Username: `owner`
+- Password: `owner`
+
+Change the owner password immediately after your first login via **Manage Users**.
+
+**Barber name matching:** Each barber account has a "Display Name" that must match the barber's name as it appears in ledger entries. Names are Title Cased automatically.
+""")
+
+    with st.expander("Getting Started"):
         st.markdown("""
 **First time here?** Follow these steps:
 
-1. Go to **New Entry** in the sidebar
-2. Fill in the barber name, customer name, service type, and cost
-3. Click **Add to Ledger** — your transaction is saved instantly
-4. Head to **Analytics** or **Owner Dashboard** to see your numbers
+1. Log in with your account (owner sets up barber accounts via **Manage Users**)
+2. Go to **New Entry** in the sidebar
+3. Fill in the customer name, service type, and cost (barber name is auto-filled)
+4. Click **Add to Ledger** — your transaction is saved instantly
+5. Head to **Analytics** to see your numbers
 
 Your data is saved to a local CSV file (`shop_data.csv`) so it persists between sessions.
 A backup (`shop_data_backup.csv`) is created automatically before every save.
@@ -782,14 +1028,103 @@ A: Not directly — delete the wrong entry and re-add it with the correct info.
 A: Your data is safe on disk. When you reopen the app, it loads from the CSV file automatically.
 
 **Q: Can multiple people use this at the same time?**
-A: Each person should keep their own CSV and use **Merge Ledgers** to combine them. Simultaneous writes to the same file could cause conflicts.
+A: Yes — each person logs in with their own account and sees only their own data. Note that simultaneous writes to the same CSV file could cause minor conflicts if two people save at the exact same moment.
 
 **Q: How do I reset everything?**
-A: Delete `shop_data.csv` and `shop_data_backup.csv`, then refresh the app.
+A: Delete `shop_data.csv`, `shop_data_backup.csv`, and `users.json`, then refresh the app.
 
 **Q: How do I keep employees out of the Owner Dashboard?**
-A: The Owner Dashboard is password-protected. Only share the password with authorized users. You can change the password from the login screen.
+A: Barber accounts cannot see the Owner Dashboard or Merge Ledgers pages at all. Additionally, the Owner Dashboard has its own separate password for extra protection.
 
 **Q: What is the Duration field for?**
 A: It tracks how long each service takes (in 15-minute steps). This helps identify which services are most time-efficient and shows up as "Avg Duration" on the Analytics page.
 """)
+
+# =========================
+# PAGE: MANAGE USERS
+# =========================
+elif page == "Manage Users":
+    if st.session_state.current_role != "owner":
+        st.error("Access denied.")
+        st.stop()
+
+    st.title("Manage User Accounts")
+
+    # --- Display existing users ---
+    st.subheader("Current Accounts")
+    users = st.session_state.users
+
+    if users:
+        user_rows = []
+        for uname, udata in users.items():
+            user_rows.append({
+                "Username": uname,
+                "Display Name": udata.get("display_name", ""),
+                "Role": udata.get("role", ""),
+            })
+        st.dataframe(pd.DataFrame(user_rows), use_container_width=True)
+    else:
+        st.info("No accounts found.")
+
+    # --- Add new barber account ---
+    st.markdown("---")
+    st.subheader("Add Barber Account")
+    with st.form("add_user_form", clear_on_submit=True):
+        new_username = st.text_input("Username", placeholder="e.g. david",
+            help="Lowercase login name for the barber.")
+        new_display = st.text_input("Display Name", placeholder="e.g. David",
+            help="This must match how the barber's name appears in ledger entries (after Title Case).")
+        new_password = st.text_input("Password", type="password",
+            help="Initial password for the barber.")
+        add_btn = st.form_submit_button("Create Account", use_container_width=True, type="primary")
+
+    if add_btn:
+        clean_username = new_username.lower().strip()
+        if not clean_username:
+            st.error("Username is required.")
+        elif clean_username in st.session_state.users:
+            st.error(f"Username '{clean_username}' already exists.")
+        elif not new_display.strip():
+            st.error("Display name is required.")
+        elif not new_password:
+            st.error("Password is required.")
+        else:
+            st.session_state.users[clean_username] = {
+                "password": new_password,
+                "role": "barber",
+                "display_name": new_display.strip().title(),
+            }
+            save_users(st.session_state.users)
+            st.success(f"Account '{clean_username}' created for {new_display.strip().title()}!")
+            st.rerun()
+
+    # --- Reset password ---
+    st.markdown("---")
+    st.subheader("Reset Password")
+    if users:
+        usernames = list(users.keys())
+        selected_user = st.selectbox("Select user", usernames)
+        with st.form("reset_pw_form"):
+            reset_pw = st.text_input("New Password", type="password")
+            reset_btn = st.form_submit_button("Reset Password", use_container_width=True)
+        if reset_btn:
+            if not reset_pw:
+                st.error("Password cannot be empty.")
+            else:
+                st.session_state.users[selected_user]["password"] = reset_pw
+                save_users(st.session_state.users)
+                st.success(f"Password reset for '{selected_user}'.")
+
+    # --- Delete account ---
+    st.markdown("---")
+    st.subheader("Delete Account")
+    deletable = [u for u in users.keys() if users[u]["role"] != "owner"]
+    if deletable:
+        del_user = st.selectbox("Select account to delete", deletable, key="del_user_select")
+        if st.button("Delete Account", type="secondary"):
+            del st.session_state.users[del_user]
+            save_users(st.session_state.users)
+            st.success(f"Account '{del_user}' deleted.")
+            st.rerun()
+    else:
+        st.info("No barber accounts to delete.")
