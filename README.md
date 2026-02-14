@@ -1,19 +1,33 @@
-# 🎈 Blank app template
+# ClipperLedger
 
-A simple Streamlit app template for you to modify!
+ClipperLedger is a Streamlit app for tracking barber shop transactions, reviewing monthly analytics, and projecting owner profit.
 
-[![Open in Streamlit](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://blank-app-template.streamlit.app/)
+## Features
 
-### How to run it on your own machine
+- Add and validate transactions with warning-based confirmation for unusual entries.
+- View, download, and delete ledger records.
+- Merge multiple barber CSV files with ID deduplication.
+- Analytics dashboard with revenue, service mix, and busiest-hour charts.
+- Owner dashboard with password gate, commission model, and 30-day projection.
+- Automatic CSV backup before write operations.
 
-1. Install the requirements
+## Data files
 
-   ```
-   $ pip install -r requirements.txt
-   ```
+The app stores data in the project directory:
 
-2. Run the app
+- `shop_data.csv` — primary ledger
+- `shop_data_backup.csv` — automatic backup
 
-   ```
-   $ streamlit run streamlit_app.py
-   ```
+## Run locally
+
+1. Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+2. Start the app:
+
+```bash
+streamlit run streamlit_app.py
+```
