@@ -67,7 +67,11 @@ def load_data() -> pd.DataFrame:
             if os.path.exists(BACKUP_FILE):
                 try:
                     st.info("Loading from backup...")
-                    return pd.read_csv(BACKUP_FILE)
+                    backup_df = pd.read_csv(BACKUP_FILE)
+                    for col in REQUIRED_COLS:
+                        if col not in backup_df.columns:
+                            backup_df[col] = pd.NA
+                    return backup_df[REQUIRED_COLS]
                 except Exception:
                     pass
             return pd.DataFrame(columns=REQUIRED_COLS)
@@ -355,7 +359,7 @@ elif page == "Merge Ledgers":
 
     uploaded_files = st.file_uploader(
         "Upload CSV files", type=["csv"], accept_multiple_files=True,
-        help="Select one or more .csv files. Each file must have these columns: ID, Date, Time, Barber_Name, Customer_Name, Service_Type, Cost, Role.",
+        help="Select one or more .csv files. Required columns: ID, Date, Time, Barber_Name, Customer_Name, Service_Type, Cost, Role. Duration_Min is optional.",
     )
 
     if uploaded_files:
@@ -368,10 +372,16 @@ elif page == "Merge Ledgers":
                 try:
                     df_temp = pd.read_csv(file)
 
-                    missing_cols = set(REQUIRED_COLS) - set(df_temp.columns)
+                    required_for_import = [c for c in REQUIRED_COLS if c != "Duration_Min"]
+                    missing_cols = set(required_for_import) - set(df_temp.columns)
                     if missing_cols:
                         st.error(f"{file.name} missing columns: {missing_cols}")
                         continue
+
+                    if "Duration_Min" not in df_temp.columns:
+                        df_temp["Duration_Min"] = 30
+
+                    df_temp = df_temp[REQUIRED_COLS]
 
                     dfs.append(df_temp)
                     st.success(f"{file.name} validated ({len(df_temp)} records)")
@@ -549,8 +559,7 @@ The default password is **owner**. To change it, use the sidebar option below.
                 st.session_state.owner_password = new_pw
                 st.success("Password changed! You can now log in with your new password.")
 
-    elif st.session_state.ledger.empty:
-        st.warning("No data available.")
+    else:
         try:
             df = get_clean_ledger()
 
